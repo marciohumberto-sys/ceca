@@ -1,0 +1,10 @@
+{
+  "rewrites": [
+    { "source": "/products(.*)", "destination": "/api/index.js" },
+    { "source": "/sales(.*)", "destination": "/api/index.js" },
+    { "source": "/customers(.*)", "destination": "/api/index.js" },
+    { "source": "/dashboard(.*)", "destination": "/api/index.js" },
+    { "source": "/receivables(.*)", "destination": "/api/index.js" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
