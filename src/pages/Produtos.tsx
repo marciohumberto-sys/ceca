@@ -58,6 +58,7 @@ export default function Produtos() {
     name: '',
     category: 'Eletrônicos',
     price: '',
+    costPrice: '',
     stock: '0',
     minStock: '0'
   });
@@ -78,10 +79,12 @@ export default function Produtos() {
     setSelectedProductId(product.id);
     setIsEditing(true);
     const priceCents = (product.preco * 100).toFixed(0);
+    const costPriceCents = (product.precoCusto * 100).toFixed(0);
     setFormData({
       name: product.nome,
       category: product.categoria,
       price: formatBRL(priceCents),
+      costPrice: formatBRL(costPriceCents),
       stock: String(product.estoque),
       minStock: String(product.minimo)
     });
@@ -173,6 +176,7 @@ export default function Produtos() {
             estoque: stock,
             minimo: minStock,
             preco: Number(p.salePrice || 0),
+            precoCusto: Number(p.costPrice || 0),
             status,
             totalVendido
           };
@@ -208,6 +212,10 @@ export default function Produtos() {
       setSaveError('O preço é obrigatório.');
       return;
     }
+    if (!formData.costPrice) {
+      setSaveError('O preço de custo é obrigatório.');
+      return;
+    }
     if (formData.stock === '') {
       setSaveError('O estoque é obrigatório.');
       return;
@@ -224,6 +232,7 @@ export default function Produtos() {
       name: formData.name,
       category: formData.category,
       salePrice: parseBRLToNumber(formData.price),
+      costPrice: parseBRLToNumber(formData.costPrice),
       stockQuantity: parseInt(formData.stock) || 0,
       minStock: parseInt(formData.minStock) || 0,
       active: true
@@ -253,6 +262,7 @@ export default function Produtos() {
           name: '',
           category: 'Eletrônicos',
           price: '',
+          costPrice: '',
           stock: '0',
           minStock: '0'
         });
@@ -321,6 +331,7 @@ export default function Produtos() {
                 name: '',
                 category: 'Eletrônicos',
                 price: '',
+                costPrice: '',
                 stock: '0',
                 minStock: '0'
               });
@@ -451,7 +462,10 @@ export default function Produtos() {
                     </div>
 
                     {/* Column 4 (PREÇO) */}
-                    <p className="hidden lg:block text-sm font-bold text-graphite-900 text-right self-center">{formatCurrency(p.preco)}</p>
+                    <div className="hidden lg:flex flex-col items-end self-center">
+                      <span className="text-sm font-bold text-graphite-900">{formatCurrency(p.preco)}</span>
+                      <span className="text-[10px] text-graphite-400 font-medium">Custo: {formatCurrency(p.precoCusto)}</span>
+                    </div>
 
                     {/* Column 5 (STATUS) */}
                     <div className="hidden lg:flex justify-center items-center self-center">
@@ -486,7 +500,10 @@ export default function Produtos() {
 
                 {/* Mobile right */}
                 <div className="lg:hidden text-right flex-shrink-0 ml-3 flex flex-col gap-1 items-end">
-                  <p className="text-sm font-bold text-graphite-900">{formatCurrency(p.preco)}</p>
+                  <div className="flex flex-col items-end">
+                    <span className="text-sm font-bold text-graphite-900">{formatCurrency(p.preco)}</span>
+                    <span className="text-[10px] text-graphite-400 font-medium">Custo: {formatCurrency(p.precoCusto)}</span>
+                  </div>
                   <StatusBadge status={p.status} />
                   <div className="flex gap-1.5 mt-1">
                     <button
@@ -587,7 +604,7 @@ export default function Produtos() {
               <option value="Papelaria">Papelaria</option>
             </select>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="flex flex-col">
               <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Preço (R$)</label>
               <input 
@@ -596,6 +613,18 @@ export default function Produtos() {
                 className="form-input"
                 value={formData.price}
                 onChange={(e) => setFormData(prev => ({ ...prev, price: formatBRL(e.target.value) }))}
+                disabled={saving}
+                required
+              />
+            </div>
+            <div className="flex flex-col">
+              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Custo (R$)</label>
+              <input 
+                type="text" 
+                placeholder="R$ 0,00"
+                className="form-input"
+                value={formData.costPrice}
+                onChange={(e) => setFormData(prev => ({ ...prev, costPrice: formatBRL(e.target.value) }))}
                 disabled={saving}
                 required
               />

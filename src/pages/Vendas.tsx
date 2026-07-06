@@ -4,6 +4,25 @@ import { formatCurrency } from '../data/mockData';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 
+const formatBRL = (value: string | number) => {
+  const str = String(value);
+  const digits = str.replace(/\D/g, '');
+  if (!digits) return '';
+  const num = parseFloat(digits) / 100;
+  return num.toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+};
+
+const parseBRLToNumber = (value: string) => {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return 0;
+  return parseFloat(digits) / 100;
+};
+
 function StatusBadge({ status }: { status: string }) {
   if (status === 'Pago') return <span className="badge-success px-2.5 py-1 font-bold text-[10.5px] leading-none tracking-wide">{status}</span>;
   if (status === 'Atrasado') return <span className="badge-danger px-2.5 py-1 font-bold text-[10.5px] leading-none tracking-wide">{status}</span>;
@@ -22,8 +41,10 @@ export default function Vendas() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
-  const [selectedProductId, setSelectedProductId] = useState('');
-  const [quantity, setQuantity] = useState(1);
+  const [saleItems, setSaleItems] = useState<any[]>([{ productId: '', quantity: 1, unitPrice: 0 }]);
+  const [notes, setNotes] = useState('');
+  const [paymentType, setPaymentType] = useState('À vista');
+  const [installments, setInstallments] = useState<any[]>([]);
   const [paymentMethod, setPaymentMethod] = useState('PIX');
   const [discount, setDiscount] = useState(0);
   const [savingSale, setSavingSale] = useState(false);
@@ -89,8 +110,8 @@ export default function Vendas() {
             color,
             initials,
             customerId: sale.customerId,
-            productId: sale.items && sale.items.length > 0 ? sale.items[0].productId : '',
-            quantity: sale.items && sale.items.length > 0 ? sale.items[0].quantity : 1,
+            items: sale.items || [],
+            notes: sale.notes || '',
             discount: Number(sale.discount || 0)
           };
         });
@@ -130,18 +151,49 @@ export default function Vendas() {
     }
   }, [customers, selectedCustomerId]);
 
-  useEffect(() => {
-    if (products.length > 0 && !selectedProductId) {
-      setSelectedProductId(products[0].id);
-    }
-  }, [products, selectedProductId]);
-
   const handleEditSaleClick = (v: any) => {
     setSelectedSaleId(v.originalId);
     setIsEditing(true);
     setSelectedCustomerId(v.customerId || '');
-    setSelectedProductId(v.productId || '');
-    setQuantity(v.quantity || 1);
+    if (v.items && v.items.length > 0) {
+      setSaleItems(v.items.map((i: any) => ({
+        productId: i.productId,
+        quantity: i.quantity,
+        unitPrice: Number(i.unitPrice)
+      })));
+    } else {
+      setSaleItems([{ productId: '', quantity: 1, unitPrice: 0 }]);
+    }
+    setNotes(v.notes || '');
+
+    if (v.receivables && v.receivables.length > 1) {
+      setPaymentType('Parcelado');
+      setInstallments(v.receivables.map((r: any) => ({
+        id: r.id,
+        amount: Number(r.amount),
+        dueDate: r.dueDate ? r.dueDate.split('T')[0] : '',
+        status: r.status,
+        description: r.description || '',
+        observations: r.observations || '',
+        paymentMethod: r.paymentMethod || 'PIX'
+      })));
+    } else if (v.receivables && v.receivables.length === 1) {
+      setPaymentType('À vista');
+      const rec = v.receivables[0];
+      setInstallments([{
+        id: rec.id,
+        amount: Number(rec.amount),
+        dueDate: rec.dueDate ? rec.dueDate.split('T')[0] : '',
+        status: rec.status,
+        description: rec.description || '',
+        observations: rec.observations || '',
+        paymentMethod: rec.paymentMethod || 'PIX'
+      }]);
+    } else {
+      setPaymentType('À vista');
+      setInstallments([]);
+    }
+
     setPaymentMethod(v.pagamento || 'PIX');
     setDiscount(v.discount || 0);
     setSaveSaleError(null);
@@ -189,39 +241,65 @@ export default function Vendas() {
       setSaveSaleError('Selecione um cliente.');
       return;
     }
-    if (!selectedProductId) {
-      setSaveSaleError('Selecione um produto.');
+    if (saleItems.length === 0) {
+      setSaveSaleError('Adicione pelo menos um produto.');
+      return;
+    }
+    
+    const invalidItem = saleItems.find(item => !item.productId || item.quantity < 1);
+    if (invalidItem) {
+      setSaveSaleError('Todos os produtos devem ser selecionados e ter quantidade válida.');
       return;
     }
 
     const customer = customers.find(c => c.id === selectedCustomerId);
-    const product = products.find(p => p.id === selectedProductId);
 
-    if (!customer || !product) {
-      setSaveSaleError('Dados do cliente ou produto inválidos.');
+    if (!customer) {
+      setSaveSaleError('Cliente inválido.');
       return;
     }
 
     setSavingSale(true);
     setSaveSaleError(null);
 
-    const price = Number(product.salePrice);
+    const totalVenda = saleItems.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0) - discount;
+
+    let finalInstallments = [];
+    if (paymentType === 'À vista') {
+      finalInstallments = installments.length > 0 ? installments : [{
+        amount: totalVenda,
+        dueDate: new Date().toISOString().split('T')[0],
+        status: 'pago',
+        description: 'À vista',
+        paymentMethod: paymentMethod
+      }];
+      finalInstallments[0].amount = totalVenda;
+    } else {
+      const sum = installments.reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+      if (Math.abs(sum - totalVenda) > 0.01) {
+        setSaveSaleError(`A soma das parcelas (R$ ${sum.toFixed(2)}) difere do total da venda (R$ ${totalVenda.toFixed(2)}).`);
+        setSavingSale(false);
+        return;
+      }
+      finalInstallments = installments;
+    }
 
     const payload = {
       customerId: customer.id,
       customerName: customer.name,
       paymentMethod,
       discount,
-      items: [
-        {
-          productId: product.id,
-          productName: product.name,
-          quantity,
-          unitPrice: price
-        }
-      ],
-      receivableStatus: 'pendente',
-      dueDate: new Date(new Date().setDate(new Date().getDate() + 30)).toISOString()
+      notes,
+      items: saleItems.map(item => {
+        const prod = products.find(p => p.id === item.productId);
+        return {
+          productId: item.productId,
+          productName: prod ? prod.name : 'Produto Desconhecido',
+          quantity: item.quantity,
+          unitPrice: item.unitPrice
+        };
+      }),
+      installments: finalInstallments
     };
 
     const url = isEditing 
@@ -244,7 +322,10 @@ export default function Vendas() {
         return res.json();
       })
       .then(_data => {
-        setQuantity(1);
+        setSaleItems([{ productId: '', quantity: 1, unitPrice: 0 }]);
+        setNotes('');
+        setInstallments([]);
+        setPaymentType('À vista');
         setDiscount(0);
         fetchSales();
         
@@ -289,7 +370,20 @@ export default function Vendas() {
         action={
           <button
             id="nova-venda-btn"
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => {
+              setIsEditing(false);
+              setSelectedSaleId(null);
+              if (products.length > 0) {
+                setSaleItems([{ productId: products[0].id, quantity: 1, unitPrice: Number(products[0].salePrice) }]);
+              } else {
+                setSaleItems([{ productId: '', quantity: 1, unitPrice: 0 }]);
+              }
+              setNotes('');
+              setPaymentType('À vista');
+              setInstallments([]);
+              setSaveSaleError(null);
+              setIsModalOpen(true);
+            }}
             className="flex items-center gap-2 px-4 py-2.5 text-white text-sm font-bold rounded-xl transition-all duration-150 shadow-sm hover:shadow-md hover:-translate-y-px active:translate-y-0"
             style={{ background: 'linear-gradient(135deg, #1DB86E 0%, #107540 100%)' }}
           >
@@ -443,6 +537,7 @@ export default function Vendas() {
         }}
         title={isEditing ? "Editar Venda" : "Nova Venda"}
         subtitle={isEditing ? "Altere os dados desta venda" : "Registre uma nova venda no histórico comercial"}
+        maxWidth="max-w-3xl"
         footer={
           <>
             <button
@@ -491,39 +586,115 @@ export default function Vendas() {
               ))}
             </select>
           </div>
+          <div className="flex flex-col gap-2 border border-graphite-200 rounded-xl p-3 bg-graphite-50/30">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest">Produtos</label>
+              <button
+                type="button"
+                onClick={() => setSaleItems([...saleItems, { productId: products.length > 0 ? products[0].id : '', quantity: 1, unitPrice: products.length > 0 ? Number(products[0].salePrice) : 0 }])}
+                className="text-xs font-bold text-brand hover:text-brand-dark transition-colors"
+              >
+                + Adicionar Item
+              </button>
+            </div>
+            {saleItems.map((item, index) => (
+              <div key={index} className="grid grid-cols-[1fr_4rem_5rem_auto] sm:grid-cols-[1fr_5rem_6rem_auto] gap-2 items-end">
+                <div className="flex flex-col min-w-0">
+                  {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Produto</label>}
+                  <select
+                    className="form-select text-xs h-9 px-2"
+                    value={item.productId}
+                    onChange={e => {
+                      const newId = e.target.value;
+                      const prod = products.find(p => p.id === newId);
+                      const newItems = [...saleItems];
+                      newItems[index].productId = newId;
+                      if (prod) newItems[index].unitPrice = Number(prod.salePrice);
+                      setSaleItems(newItems);
+                    }}
+                    disabled={savingSale}
+                    required
+                  >
+                    <option value="" disabled>Selecione</option>
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col">
+                  {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Qtd.</label>}
+                  <input
+                    type="number"
+                    min="1"
+                    className="form-input text-xs h-9 px-2"
+                    value={item.quantity}
+                    onChange={e => {
+                      const newItems = [...saleItems];
+                      newItems[index].quantity = Math.max(1, parseInt(e.target.value) || 1);
+                      setSaleItems(newItems);
+                    }}
+                    disabled={savingSale}
+                    required
+                  />
+                </div>
+                <div className="flex flex-col">
+                  {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Preço</label>}
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="form-input text-xs h-9 px-2"
+                    value={item.unitPrice}
+                    onChange={e => {
+                      const newItems = [...saleItems];
+                      newItems[index].unitPrice = parseFloat(e.target.value) || 0;
+                      setSaleItems(newItems);
+                    }}
+                    disabled={savingSale}
+                    required
+                  />
+                </div>
+                <div className="flex flex-col justify-end h-9">
+                  {saleItems.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newItems = [...saleItems];
+                        newItems.splice(index, 1);
+                        setSaleItems(newItems);
+                      }}
+                      className="h-9 px-2 text-graphite-400 hover:text-danger hover:bg-danger-light/50 rounded-lg transition-colors flex items-center justify-center"
+                      disabled={savingSale}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  ) : (
+                    <div className="w-8"></div>
+                  )}
+                </div>
+              </div>
+            ))}
+            <div className="flex justify-end pt-2 mt-2 border-t border-graphite-200">
+              <span className="text-xs font-bold text-graphite-600">
+                Subtotal dos itens: {formatCurrency(saleItems.reduce((s, i) => s + (i.quantity * i.unitPrice), 0))}
+              </span>
+            </div>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="flex flex-col sm:col-span-2">
-              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Produto Principal</label>
+            <div className="flex flex-col">
+              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Tipo de Pagamento</label>
               <select 
                 className="form-select"
-                value={selectedProductId}
-                onChange={e => setSelectedProductId(e.target.value)}
+                value={paymentType}
+                onChange={e => setPaymentType(e.target.value)}
                 disabled={savingSale}
-                required
               >
-                {products.length === 0 ? (
-                  <option value="">Nenhum produto cadastrado</option>
-                ) : products.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} (R$ {Number(p.salePrice).toFixed(2)})</option>
-                ))}
+                <option value="À vista">À vista</option>
+                <option value="Parcelado">Parcelado Flexível</option>
               </select>
             </div>
             <div className="flex flex-col">
-              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Qtd.</label>
-              <input 
-                type="number" 
-                min="1"
-                className="form-input"
-                value={quantity}
-                onChange={e => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                disabled={savingSale}
-                required
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="flex flex-col">
-              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Forma de Pagamento</label>
+              <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Forma de Pagamento Principal</label>
               <select 
                 className="form-select"
                 value={paymentMethod}
@@ -539,16 +710,216 @@ export default function Vendas() {
             <div className="flex flex-col">
               <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Desconto (R$)</label>
               <input 
-                type="number" 
-                step="0.01" 
-                min="0"
-                placeholder="0,00"
+                type="text" 
+                placeholder="R$ 0,00"
                 className="form-input"
-                value={discount}
-                onChange={e => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                value={discount > 0 ? formatBRL(discount.toFixed(2).replace('.', '')) : ''}
+                onChange={e => setDiscount(parseBRLToNumber(e.target.value))}
                 disabled={savingSale}
               />
             </div>
+          </div>
+
+          {paymentType === 'À vista' && (
+            <div className="flex flex-col gap-2 border border-brand/20 rounded-xl p-3 bg-brand-50/10">
+              <label className="text-[10.5px] font-bold text-brand uppercase tracking-widest">Detalhes do Pagamento À vista</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex flex-col">
+                  <label className="text-[10px] text-graphite-500 font-bold mb-1">Status</label>
+                  <select
+                    className="form-select text-xs h-9 px-2"
+                    value={installments.length > 0 ? installments[0].status : 'pago'}
+                    onChange={e => {
+                      const newInst = installments.length > 0 ? [...installments] : [{ amount: 0, dueDate: new Date().toISOString().split('T')[0], status: 'pago' }];
+                      newInst[0].status = e.target.value;
+                      setInstallments(newInst);
+                    }}
+                    disabled={savingSale}
+                  >
+                    <option value="pago">Já Recebido (Pago)</option>
+                    <option value="pendente">A Receber (Pendente)</option>
+                  </select>
+                </div>
+                <div className="flex flex-col">
+                  <label className="text-[10px] text-graphite-500 font-bold mb-1">Data (Vencimento)</label>
+                  <input
+                    type="date"
+                    className="form-input text-xs h-9 px-2"
+                    value={installments.length > 0 ? installments[0].dueDate : new Date().toISOString().split('T')[0]}
+                    onChange={e => {
+                      const newInst = installments.length > 0 ? [...installments] : [{ amount: 0, dueDate: new Date().toISOString().split('T')[0], status: 'pago' }];
+                      newInst[0].dueDate = e.target.value;
+                      setInstallments(newInst);
+                    }}
+                    disabled={savingSale}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {paymentType === 'Parcelado' && (
+            <div className="flex flex-col gap-2 border border-graphite-200 rounded-xl p-3 bg-graphite-50/30">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest">Parcelas</label>
+                <button
+                  type="button"
+                  onClick={() => setInstallments([...installments, { amount: 0, dueDate: '', status: 'pendente', description: `Parcela ${installments.length + 1}` }])}
+                  className="text-xs font-bold text-brand hover:text-brand-dark transition-colors"
+                >
+                  + Adicionar Parcela
+                </button>
+              </div>
+              
+              {installments.length === 0 && (
+                <p className="text-xs text-graphite-400 italic">Nenhuma parcela adicionada.</p>
+              )}
+
+              {installments.map((inst, index) => (
+                <div key={index} className="grid grid-cols-[1fr_1fr_6rem_auto] sm:grid-cols-[2fr_7rem_7rem_8rem_auto] gap-2 items-end bg-white p-2.5 rounded-lg border border-graphite-100">
+                  <div className="flex flex-col min-w-0 sm:col-span-1 col-span-2">
+                    {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Descrição</label>}
+                    <input
+                      type="text"
+                      className="form-input text-xs h-9 px-2"
+                      placeholder="Ex: Parcela 1/3"
+                      value={inst.description}
+                      onChange={e => {
+                        const newInst = [...installments];
+                        newInst[index].description = e.target.value;
+                        setInstallments(newInst);
+                      }}
+                      disabled={savingSale}
+                    />
+                  </div>
+                  <div className="flex flex-col">
+                    {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Vencimento</label>}
+                    <input
+                      type="date"
+                      className="form-input text-xs h-9 px-2"
+                      value={inst.dueDate}
+                      onChange={e => {
+                        const newInst = [...installments];
+                        newInst[index].dueDate = e.target.value;
+                        setInstallments(newInst);
+                      }}
+                      disabled={savingSale}
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col">
+                    {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Status</label>}
+                    <select
+                      className="form-select text-xs h-9 px-2"
+                      value={inst.status}
+                      onChange={e => {
+                        const newInst = [...installments];
+                        newInst[index].status = e.target.value;
+                        setInstallments(newInst);
+                      }}
+                      disabled={savingSale}
+                    >
+                      <option value="pendente">Pendente</option>
+                      <option value="pago">Pago</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col">
+                    {index === 0 && <label className="text-[10px] text-graphite-500 font-bold mb-1 hidden sm:block">Valor (R$)</label>}
+                    <input
+                      type="text"
+                      className="form-input text-xs h-9 px-2 font-medium"
+                      placeholder="R$ 0,00"
+                      value={inst.amount ? formatBRL(Number(inst.amount).toFixed(2).replace('.', '')) : ''}
+                      onChange={e => {
+                        const newInst = [...installments];
+                        newInst[index].amount = parseBRLToNumber(e.target.value);
+                        setInstallments(newInst);
+                      }}
+                      disabled={savingSale}
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col justify-end h-9">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newInst = [...installments];
+                        newInst.splice(index, 1);
+                        setInstallments(newInst);
+                      }}
+                      className="h-9 px-2.5 text-graphite-400 hover:text-danger hover:bg-danger-light/50 rounded-lg transition-colors flex items-center justify-center"
+                      disabled={savingSale}
+                      title="Remover parcela"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              
+              {/* Resumo e Validação */}
+              {installments.length > 0 && (() => {
+                const totalVenda = saleItems.reduce((s, i) => s + (i.quantity * i.unitPrice), 0) - discount;
+                const somaParcelas = installments.reduce((s, i) => s + Number(i.amount || 0), 0);
+                const diff = totalVenda - somaParcelas;
+                const isEqual = Math.abs(diff) < 0.01;
+
+                return (
+                  <div className="mt-3 bg-white border border-graphite-200 rounded-lg p-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-4 text-xs">
+                        <div className="flex flex-col">
+                          <span className="text-graphite-400 font-medium">Total da Venda</span>
+                          <span className="font-bold text-graphite-800 text-sm">{formatCurrency(totalVenda)}</span>
+                        </div>
+                        <div className="w-px h-8 bg-graphite-100 hidden sm:block"></div>
+                        <div className="flex flex-col">
+                          <span className="text-graphite-400 font-medium">Soma das Parcelas</span>
+                          <span className={`font-bold text-sm ${isEqual ? 'text-brand' : 'text-graphite-800'}`}>
+                            {formatCurrency(somaParcelas)}
+                          </span>
+                        </div>
+                        {!isEqual && (
+                          <>
+                            <div className="w-px h-8 bg-graphite-100 hidden sm:block"></div>
+                            <div className="flex flex-col">
+                              <span className="text-danger/80 font-medium">Diferença</span>
+                              <span className="font-bold text-danger text-sm">
+                                {diff > 0 ? 'Falta ' : 'Passou '}
+                                {formatCurrency(Math.abs(diff))}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      
+                      {isEqual ? (
+                        <div className="flex items-center gap-1.5 text-brand bg-brand-50/50 px-2.5 py-1.5 rounded-md self-start sm:self-auto">
+                          <CheckCircle2 size={14} />
+                          <span className="text-[11px] font-bold">Parcelas conferem</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-danger bg-danger-light/20 px-2.5 py-1.5 rounded-md self-start sm:self-auto">
+                          <AlertCircle size={14} />
+                          <span className="text-[11px] font-bold">Corrija os valores</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          <div className="flex flex-col">
+            <label className="text-[10.5px] font-bold text-graphite-500 uppercase tracking-widest mb-1.5 block">Observação (Opcional)</label>
+            <textarea
+              className="form-input min-h-[60px] py-2 resize-y text-sm"
+              placeholder="Ex: Entrega agendada, preferência de cor..."
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              disabled={savingSale}
+            />
           </div>
         </form>
       </Modal>

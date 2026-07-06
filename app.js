@@ -593,6 +593,8 @@ app.post("/sales", async (req, res) => {
       paymentMethod,
       receivableStatus = "pendente",
       dueDate,
+      notes,
+      installments,
     } = req.body;
 
     const subtotal = items.reduce(
@@ -601,6 +603,29 @@ app.post("/sales", async (req, res) => {
     );
 
     const total = subtotal - Number(discount);
+
+    const receivablesData = installments && installments.length > 0
+      ? installments.map(inst => ({
+          customerId,
+          customerName,
+          dueDate: new Date(inst.dueDate),
+          amount: Number(inst.amount),
+          paidAmount: inst.status === "pago" ? Number(inst.amount) : null,
+          status: inst.status || "pendente",
+          paidAt: inst.status === "pago" ? new Date() : null,
+          description: inst.description || null,
+          paymentMethod: inst.paymentMethod || paymentMethod,
+          observations: inst.observations || null
+        }))
+      : [{
+          customerId,
+          customerName,
+          dueDate: dueDate ? new Date(dueDate) : new Date(),
+          amount: total,
+          paidAmount: receivableStatus === "pago" ? total : null,
+          status: receivableStatus,
+          paidAt: receivableStatus === "pago" ? new Date() : null,
+        }];
 
     const sale = await prisma.sale.create({
       data: {
@@ -611,6 +636,7 @@ app.post("/sales", async (req, res) => {
         total,
         paymentMethod,
         status: "finalizada",
+        notes,
         items: {
           create: items.map((item) => ({
             productId: item.productId,
@@ -621,15 +647,7 @@ app.post("/sales", async (req, res) => {
           })),
         },
         receivables: {
-          create: {
-            customerId,
-            customerName,
-            dueDate: dueDate ? new Date(dueDate) : new Date(),
-            amount: total,
-            paidAmount: receivableStatus === "pago" ? total : null,
-            status: receivableStatus,
-            paidAt: receivableStatus === "pago" ? new Date() : null,
-          },
+          create: receivablesData,
         },
       },
       include: {
@@ -652,8 +670,6 @@ app.post("/sales", async (req, res) => {
     );
 
     res.status(201).json(sale);
-
-    res.status(201).json(sale);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Erro ao criar venda" });
@@ -662,7 +678,7 @@ app.post("/sales", async (req, res) => {
 app.put("/sales/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { customerId, customerName, items, discount = 0, paymentMethod } = req.body;
+    const { customerId, customerName, items, discount = 0, paymentMethod, notes, installments } = req.body;
 
     const oldSale = await prisma.sale.findUnique({
       where: { id },
@@ -671,22 +687,35 @@ app.put("/sales/:id", async (req, res) => {
 
     if (!oldSale) return res.status(404).json({ error: "Venda não encontrada" });
 
-    const oldItem = oldSale.items[0];
-    const newItem = items[0];
-
     // Revert old stock
-    await prisma.product.update({
-      where: { id: oldItem.productId },
-      data: { stockQuantity: { increment: Number(oldItem.quantity) } }
+    await Promise.all(
+      oldSale.items.map(oldItem => 
+        prisma.product.update({
+          where: { id: oldItem.productId },
+          data: { stockQuantity: { increment: Number(oldItem.quantity) } }
+        })
+      )
+    );
+
+    // Delete old items
+    await prisma.saleItem.deleteMany({
+      where: { saleId: id }
     });
 
     // Apply new stock
-    await prisma.product.update({
-      where: { id: newItem.productId },
-      data: { stockQuantity: { decrement: Number(newItem.quantity) } }
-    });
+    await Promise.all(
+      items.map(newItem => 
+        prisma.product.update({
+          where: { id: newItem.productId },
+          data: { stockQuantity: { decrement: Number(newItem.quantity) } }
+        })
+      )
+    );
 
-    const subtotal = Number(newItem.quantity) * Number(newItem.unitPrice);
+    const subtotal = items.reduce(
+      (sum, item) => sum + Number(item.quantity) * Number(item.unitPrice),
+      0
+    );
     const total = subtotal - Number(discount);
 
     // Update sale
@@ -698,32 +727,63 @@ app.put("/sales/:id", async (req, res) => {
         subtotal,
         discount: Number(discount),
         total,
-        paymentMethod
-      }
-    });
-
-    // Update item
-    await prisma.saleItem.update({
-      where: { id: oldItem.id },
-      data: {
-        productId: newItem.productId,
-        productName: newItem.productName,
-        quantity: Number(newItem.quantity),
-        unitPrice: Number(newItem.unitPrice),
-        total: subtotal
+        paymentMethod,
+        notes,
+        items: {
+          create: items.map((item) => ({
+            productId: item.productId,
+            productName: item.productName,
+            quantity: Number(item.quantity),
+            unitPrice: Number(item.unitPrice),
+            total: Number(item.quantity) * Number(item.unitPrice),
+          })),
+        }
       }
     });
 
     // Update receivable if exists
-    if (oldSale.receivables && oldSale.receivables.length > 0) {
-      await prisma.receivable.update({
-        where: { id: oldSale.receivables[0].id },
-        data: {
+    if (installments && installments.length > 0) {
+      const newIds = installments.filter(i => i.id).map(i => i.id);
+      await prisma.receivable.deleteMany({
+        where: { saleId: id, id: { notIn: newIds } }
+      });
+      
+      for (const inst of installments) {
+        const data = {
           customerId,
           customerName,
-          amount: total
+          dueDate: new Date(inst.dueDate),
+          amount: Number(inst.amount),
+          paidAmount: inst.status === "pago" ? Number(inst.amount) : null,
+          status: inst.status || "pendente",
+          description: inst.description || null,
+          paymentMethod: inst.paymentMethod || paymentMethod,
+          observations: inst.observations || null
+        };
+
+        if (inst.status === "pago" && inst.rawStatus !== "pago") {
+           data.paidAt = new Date();
+        } else if (inst.status !== "pago") {
+           data.paidAt = null;
         }
-      });
+
+        if (inst.id) {
+          await prisma.receivable.update({ where: { id: inst.id }, data });
+        } else {
+          await prisma.receivable.create({ data: { ...data, saleId: id, paidAt: inst.status === "pago" ? new Date() : null } });
+        }
+      }
+    } else {
+      if (oldSale.receivables && oldSale.receivables.length > 0) {
+        await prisma.receivable.update({
+          where: { id: oldSale.receivables[0].id },
+          data: {
+            customerId,
+            customerName,
+            amount: total
+          }
+        });
+      }
     }
 
     res.json({ message: "Venda atualizada com sucesso" });

@@ -8,9 +8,10 @@ interface ModalProps {
   subtitle?: string;
   children: ReactNode;
   footer?: ReactNode;
+  maxWidth?: string;
 }
 
-export default function Modal({ isOpen, onClose, title, subtitle, children, footer }: ModalProps) {
+export default function Modal({ isOpen, onClose, title, subtitle, children, footer, maxWidth = 'max-w-lg' }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const [shouldRender, setShouldRender] = useState(isOpen);
   const [isClosing, setIsClosing] = useState(false);
@@ -55,7 +56,7 @@ export default function Modal({ isOpen, onClose, title, subtitle, children, foot
       {/* Modal Container */}
       <div 
         ref={modalRef}
-        className={`relative w-full max-w-lg bg-bg-card rounded-2xl shadow-[0_16px_40px_-10px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.15)] border border-graphite-100 flex flex-col max-h-[90vh] overflow-hidden ${
+        className={`relative w-full ${maxWidth} bg-bg-card rounded-2xl shadow-[0_16px_40px_-10px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.15)] border border-graphite-100 flex flex-col max-h-[90vh] overflow-hidden ${
           isClosing ? 'animate-modal-card-out' : 'animate-modal-card-in'
         }`}
       >

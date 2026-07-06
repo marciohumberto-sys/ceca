@@ -18,7 +18,7 @@ model Product {
   sku           String?  @unique
   category      String?
   salePrice     Decimal  @db.Decimal(10, 2)
-  costPrice     Decimal? @db.Decimal(10, 2)
+  costPrice     Decimal  @default(0) @db.Decimal(10, 2)
   stockQuantity Int      @default(0)
   minStock      Int      @default(0)
   active        Boolean  @default(true)
@@ -55,6 +55,7 @@ model Sale {
   total         Decimal @db.Decimal(10, 2)
   paymentMethod String?
   status        String  @default("finalizada")
+  notes         String?
 
   customer    Customer?    @relation(fields: [customerId], references: [id])
   items       SaleItem[]
@@ -89,6 +90,9 @@ model Receivable {
   paidAmount   Decimal?  @db.Decimal(10, 2)
   status       String    @default("pendente")
   paidAt       DateTime?
+  description  String?
+  paymentMethod String?
+  observations String?
 
   sale     Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
   customer Customer? @relation(fields: [customerId], references: [id])
